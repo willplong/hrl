@@ -7,3 +7,6 @@ black hrl/
 
 echo "Running pylint..."
 pylint hrl/
+
+echo "Stripping notebook output..."
+nbstripout --drop-empty-cells notebooks/*
