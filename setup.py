@@ -1,7 +1,7 @@
 import setuptools
 from setuptools import setup
 
-install_deps = ["ipykernel", "matplotlib", "scikit-learn", "statsmodels"]
+install_deps = ["ipykernel", "matplotlib", "requests", "scikit-learn", "statsmodels"]
 dev_deps = ["black", "isort", "nbstripout", "pylint"]
 
 with open("README.md", "r") as fh:
