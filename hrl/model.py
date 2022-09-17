@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+import scipy
 from scipy.optimize import Bounds, LinearConstraint
 from scipy.stats import norm
 
@@ -40,34 +41,86 @@ class DecisionModel(ABC):
     def param_constraints(self) -> LinearConstraint | None:
         return self._param_constraints
 
-    @abstractmethod
     def action_probabilities(self, stimuli: float | np.ndarray) -> np.ndarray:
+        stimuli = self._convert_array(stimuli)
+        return self._action_probabilities_impl(stimuli)
+
+    @abstractmethod
+    def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
-    def sample(self, stimuli: float | np.ndarray) -> np.ndarray:
+    def simulate(self, stimuli: float | np.ndarray) -> np.ndarray:
         probabilities = self.action_probabilities(stimuli)
-        if probabilities.ndim == 1:
-            probabilities = probabilities.reshape(1, -1)
         return np.array(
             [np.random.choice(self._NUM_ACTIONS, p=prob) for prob in probabilities]
         )
 
-    def likelihood(
-        self, stimuli: float | np.ndarray, actions: float | np.ndarray
-    ) -> np.ndarray:
+    def log_likelihood(
+        self,
+        stimuli: float | np.ndarray,
+        actions: int | np.ndarray,
+        weights: np.ndarray | None = None,
+    ) -> float:
+        """
+        Computes the log likelihood of the model given the stimuli and actions.
+
+        Args:
+            stimuli: The stimuli presented to the subject.
+            actions: The actions taken by the subject.
+            weights: The weights to apply to each trial (e.g., for EM algorithms). If
+                None, all trials are weighted equally.
+        """
         probabilities = self.action_probabilities(stimuli)
         if type(actions) is not np.ndarray:
-            return probabilities[0, actions]
+            if len(probabilities) > 1:
+                raise ValueError("Must provide array of actions for multiple trials.")
+            if weights is not None:
+                raise ValueError("Cannot provide weights for single trial.")
+            return np.log(probabilities[0, actions])
+        if weights is None:
+            weights = 1
         likelihoods = np.zeros_like(actions, dtype=float)
         for i in range(probabilities.shape[-1]):
             likelihoods[actions == i] = probabilities[actions == i, i]
-        return likelihoods
+        return np.sum(weights * np.log(likelihoods))
 
-    def __repr__(self) -> str:
-        param_str = ", ".join(
-            f"{name}={value}" for name, value in zip(self._param_names, self.params)
-        )
-        return f"{self.__class__.__name__}({param_str})"
+    def fit(
+        self,
+        stimuli: float | np.ndarray,
+        actions: int | np.ndarray,
+        weights: np.ndarray | None = None,
+    ) -> None:
+        """
+        Fits the model to the given data.
+
+        Args:
+            stimuli: The stimuli presented to the subject.
+            actions: The actions taken by the subject.
+            weights: The weights to apply to each trial (e.g., for EM algorithms). If
+                None, all trials are weighted equally.
+        """
+
+        def nll(params):
+            self.params = params
+            return -self.log_likelihood(stimuli, actions, weights)
+
+        self.params = scipy.optimize.minimize(
+            nll,
+            self.params,
+            method="trust-constr",
+            bounds=self.param_bounds,
+            constraints=self.param_constraints,
+        ).x
+
+    def _convert_array(self, stimuli: float | np.ndarray) -> np.ndarray:
+        """Ensures stimuli is always a 2D array of shape (trials, features)."""
+        if type(stimuli) is not np.ndarray:
+            stimuli = np.array([stimuli])
+        if stimuli.ndim == 1:
+            stimuli = stimuli.reshape(1, -1)
+        elif stimuli.ndim > 2:
+            raise ValueError("Stimuli must be a 1D or 2D array.")
+        return stimuli
 
 
 class CategoricalDecisionModel(DecisionModel):
@@ -84,7 +137,7 @@ class CategoricalDecisionModel(DecisionModel):
         )
         super().__init__(probabilities, param_names, param_bounds, param_constraints)
 
-    def action_probabilities(self, stimuli: float | np.ndarray) -> np.ndarray:
+    def _action_probabilities_impl(self, stimuli: float | np.ndarray) -> np.ndarray:
         if type(stimuli) is not np.ndarray:
             return self._params
         return np.tile(self._params, reps=stimuli.shape + (1,))
@@ -96,19 +149,19 @@ class LogisticDecisionModel(DecisionModel):
     ) -> None:
         if bias is None:
             bias = np.random.random()
-        if stim_weight is None:
-            stim_weight = np.random.random()
-        params = np.array([bias, stim_weight])
-        param_names = ["bias", "w_stim"]
+        if weights is None:
+            weights = np.random.random()
+        try:
+            params = np.array([bias, *weights])
+            param_names = ["bias", *[f"w{i}" for i in range(len(weights))]]
+        except TypeError:
+            params = np.array([bias, weights])
+            param_names = ["bias", "weight"]
         super().__init__(params, param_names)
 
-    def action_probabilities(
-        self, stimuli: float | np.ndarray | None = None
-    ) -> np.ndarray:
-        if type(stimuli) is not np.ndarray:
-            stimuli = np.array([stimuli])
-        bias, weight = self._params
-        p = 1 / (1 + np.exp(-bias - weight * stimuli))
+    def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
+        bias, weights = self.params[0], self.params[1:]
+        p = 1 / (1 + np.exp(-bias - np.sum(weights * stimuli, axis=1)))
         return np.stack([1 - p, p], axis=-1)
 
 
@@ -137,11 +190,7 @@ class RLDecisionModel(DecisionModel):
         )
         super().__init__(params, param_names, param_bounds, param_constraints)
 
-    def action_probabilities(
-        self, stimuli: float | np.ndarray | None = None
-    ) -> np.ndarray:
-        if type(stimuli) is not np.ndarray:
-            stimuli = np.array([stimuli])
+    def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
         mu, sigma, gamma, lamda = self._params
         p = gamma + (1 - gamma - lamda) * norm.cdf(stimuli, mu, sigma)
         return np.stack([1 - p, p], axis=-1)
