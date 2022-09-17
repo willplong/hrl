@@ -185,27 +185,26 @@ class RLDecisionModel(DecisionModel):
         gamma_l: float | None = None,
         gamma_h: float | None = None,
     ) -> None:
-        params = np.array(
-            [
-                np.random.random() if p is None else p
-                for p in [mu, sigma, gamma_l, gamma_h]
-            ]
-        )
+        # TODO: Avoid hard-coding mu based on the IBL dataset.
+        mu = np.random.uniform(10, 15) if mu is None else mu
+        sigma = np.random.uniform(0.1, 1) if sigma is None else sigma
+        gamma_l = np.random.uniform(0, 0.2) if gamma_l is None else gamma_l
+        gamma_h = np.random.uniform(0, 0.2) if gamma_h is None else gamma_h
+        params = np.array([mu, sigma, gamma_l, gamma_h])
         param_names = ["mu", "sigma", "gamma_l", "gamma_h"]
+        # TODO: Check whether bounds and constraints are correct.
         param_bounds = Bounds(
             lb=np.array([-np.inf, 0, 0, 0]),
-            ub=np.array([np.inf, np.inf, 1, 1]),
+            ub=np.array([np.inf, np.inf, 0.5, 0.5]),
             keep_feasible=True,
         )
         param_constraints = LinearConstraint(
-            np.array([[0, 0, 1, 1], [0, 0, 1, -1]]),
-            lb=0,
-            ub=np.array([1, 0]),
-            keep_feasible=True,
+            np.array([[0, 0, 1, 1]]), lb=0, ub=1, keep_feasible=True
         )
         super().__init__(params, param_names, param_bounds, param_constraints)
 
     def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
-        mu, sigma, gamma, lamda = self._params
-        p = gamma + (1 - gamma - lamda) * norm.cdf(stimuli, mu, sigma)
+        mu, sigma, gamma_l, gamma_h = self.params
+        p = gamma_l + (1 - gamma_l - gamma_h) * norm.cdf(stimuli, mu, sigma)
+        p = p.squeeze()
         return np.stack([1 - p, p], axis=-1)
