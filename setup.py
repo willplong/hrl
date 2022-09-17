@@ -10,7 +10,7 @@ install_deps = [
     "statsmodels",
     "tqdm",
 ]
-dev_deps = ["black", "isort", "nbstripout", "pylint"]
+dev_deps = ["black", "flake8", "isort", "nbstripout", "pylint"]
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
