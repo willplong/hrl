@@ -7,7 +7,7 @@ from scipy.stats import norm
 
 
 class DecisionModel(ABC):
-    _NUM_ACTIONS = 2
+    NUM_ACTIONS = 2
 
     def __init__(
         self,
@@ -59,10 +59,25 @@ class DecisionModel(ABC):
     def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
+    def sample(self, stimulus: float | np.ndarray) -> int:
+        """Samples a single action from the model."""
+        probabilities = self.action_probabilities(stimulus)
+        if len(probabilities) != 1:
+            raise ValueError("Must provide single stimulus for sampling.")
+        return np.random.choice(self.NUM_ACTIONS, p=probabilities[0])
+
+    def likelihood(self, stimulus: float | np.ndarray, action: int) -> float:
+        """Computes the likelihood of a single action given a stimulus."""
+        probabilities = self.action_probabilities(stimulus)
+        if len(probabilities) != 1:
+            raise ValueError("Must provide single stimulus for sampling.")
+        return probabilities[0, action]
+
     def simulate(self, stimuli: float | np.ndarray) -> np.ndarray:
+        """Simulates the model given the stimuli (multiple trials)."""
         probabilities = self.action_probabilities(stimuli)
         return np.array(
-            [np.random.choice(self._NUM_ACTIONS, p=prob) for prob in probabilities]
+            [np.random.choice(self.NUM_ACTIONS, p=prob) for prob in probabilities]
         )
 
     def log_likelihood(
@@ -72,7 +87,7 @@ class DecisionModel(ABC):
         weights: np.ndarray | None = None,
     ) -> float:
         """
-        Computes the log likelihood of the model given the stimuli and actions.
+        Computes the log likelihood of the model across all trials.
 
         Args:
             stimuli: The stimuli presented to the subject.
@@ -123,27 +138,24 @@ class DecisionModel(ABC):
         ).x
 
     def _convert_array(self, stimuli: float | np.ndarray) -> np.ndarray:
-        """Ensures stimuli is always a 2D array of shape (trials, features)."""
         if type(stimuli) is not np.ndarray:
             stimuli = np.array([stimuli])
         if stimuli.ndim == 1:
             stimuli = stimuli.reshape(1, -1)
-        elif stimuli.ndim > 2:
-            raise ValueError("Stimuli must be a 1D or 2D array.")
         return stimuli
 
 
 class CategoricalDecisionModel(DecisionModel):
     def __init__(self, probabilities: np.ndarray | list | None = None) -> None:
         if probabilities is None:
-            probabilities = np.random.random(self._NUM_ACTIONS)
+            probabilities = np.random.random(self.NUM_ACTIONS)
             probabilities /= probabilities.sum()
         elif type(probabilities) is list:
             probabilities = np.array(probabilities)
         param_names = [f"p{i}" for i in range(len(probabilities))]
         param_bounds = Bounds(0, 1, keep_feasible=True)
         param_constraints = LinearConstraint(
-            np.ones(self._NUM_ACTIONS), lb=1, ub=1, keep_feasible=True
+            np.ones(self.NUM_ACTIONS), lb=1, ub=1, keep_feasible=True
         )
         super().__init__(probabilities, param_names, param_bounds, param_constraints)
 
@@ -173,7 +185,7 @@ class LogisticDecisionModel(DecisionModel):
 
     def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
         bias, weights = self.params[0], self.params[1:]
-        p = 1 / (1 + np.exp(-bias - np.sum(weights * stimuli, axis=1)))
+        p = 1 / (1 + np.exp(-bias - np.sum(weights * stimuli, axis=-1)))
         return np.stack([1 - p, p], axis=-1)
 
 
