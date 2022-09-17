@@ -4,6 +4,7 @@ from setuptools import setup
 install_deps = [
     "ipykernel",
     "matplotlib",
+    "pymatreader",
     "requests",
     "scikit-learn",
     "statsmodels",
