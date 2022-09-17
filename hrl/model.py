@@ -25,6 +25,12 @@ class DecisionModel(ABC):
         self._param_bounds = param_bounds
         self._param_constraints = param_constraints
 
+    def __repr__(self) -> str:
+        param_str = ", ".join(
+            f"{name}={value}" for name, value in zip(self._param_names, self.params)
+        )
+        return f"{self.__class__.__name__}({param_str})"
+
     @property
     def params(self) -> np.ndarray:
         return self._params
@@ -32,6 +38,10 @@ class DecisionModel(ABC):
     @params.setter
     def params(self, new_params: np.ndarray) -> None:
         self._params = new_params
+
+    @property
+    def param_names(self) -> list[str]:
+        return self._param_names
 
     @property
     def param_bounds(self) -> Bounds | None:
@@ -145,7 +155,9 @@ class CategoricalDecisionModel(DecisionModel):
 
 class LogisticDecisionModel(DecisionModel):
     def __init__(
-        self, bias: float | None = None, stim_weight: float | None = None
+        self,
+        bias: float | None = None,
+        weights: float | list | np.ndarray | None = None,
     ) -> None:
         if bias is None:
             bias = np.random.random()
@@ -170,13 +182,16 @@ class RLDecisionModel(DecisionModel):
         self,
         mu: float | None = None,
         sigma: float | None = None,
-        gamma: float | None = None,
-        lamda: float | None = None,
+        gamma_l: float | None = None,
+        gamma_h: float | None = None,
     ) -> None:
         params = np.array(
-            [np.random.random() if p is None else p for p in [mu, sigma, gamma, lamda]]
+            [
+                np.random.random() if p is None else p
+                for p in [mu, sigma, gamma_l, gamma_h]
+            ]
         )
-        param_names = ["mu", "sigma", "gamma", "lamda"]
+        param_names = ["mu", "sigma", "gamma_l", "gamma_h"]
         param_bounds = Bounds(
             lb=np.array([-np.inf, 0, 0, 0]),
             ub=np.array([np.inf, np.inf, 1, 1]),
