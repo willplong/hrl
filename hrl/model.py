@@ -59,23 +59,11 @@ class DecisionModel(ABC):
     def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
-    def sample(self, stimulus: float | np.ndarray) -> int:
-        """Samples a single action from the model."""
-        probabilities = self.action_probabilities(stimulus)
-        if len(probabilities) != 1:
-            raise ValueError("Must provide single stimulus for sampling.")
-        return np.random.choice(self.NUM_ACTIONS, p=probabilities[0])
-
-    def likelihood(self, stimulus: float | np.ndarray, action: int) -> float:
-        """Computes the likelihood of a single action given a stimulus."""
-        probabilities = self.action_probabilities(stimulus)
-        if len(probabilities) != 1:
-            raise ValueError("Must provide single stimulus for sampling.")
-        return probabilities[0, action]
-
     def simulate(self, stimuli: float | np.ndarray) -> np.ndarray:
-        """Simulates the model given the stimuli (multiple trials)."""
+        """Simulates the model given the stimuli."""
         probabilities = self.action_probabilities(stimuli)
+        if len(probabilities) == 1:
+            return np.random.choice(self.NUM_ACTIONS, p=probabilities[0])
         return np.array(
             [np.random.choice(self.NUM_ACTIONS, p=prob) for prob in probabilities]
         )
@@ -84,7 +72,7 @@ class DecisionModel(ABC):
         self,
         stimuli: float | np.ndarray,
         actions: int | np.ndarray,
-        weights: np.ndarray | None = None,
+        sum_over_trials: bool = True,
     ) -> float:
         """
         Computes the log likelihood of the model across all trials.
@@ -92,22 +80,21 @@ class DecisionModel(ABC):
         Args:
             stimuli: The stimuli presented to the subject.
             actions: The actions taken by the subject.
-            weights: The weights to apply to each trial (e.g., for EM algorithms). If
-                None, all trials are weighted equally.
+            sum_over_trials: Whether to sum the log likelihood across trials. If False,
+                the log likelihood is returned for each trial.
         """
         probabilities = self.action_probabilities(stimuli)
         if type(actions) is not np.ndarray:
             if len(probabilities) > 1:
                 raise ValueError("Must provide array of actions for multiple trials.")
-            if weights is not None:
-                raise ValueError("Cannot provide weights for single trial.")
             return np.log(probabilities[0, actions])
-        if weights is None:
-            weights = 1
         likelihoods = np.zeros_like(actions, dtype=float)
         for i in range(probabilities.shape[-1]):
             likelihoods[actions == i] = probabilities[actions == i, i]
-        return np.sum(weights * np.log(likelihoods))
+        result = np.log(likelihoods)
+        if sum_over_trials:
+            return result.sum()
+        return result
 
     def fit(
         self,
@@ -121,13 +108,17 @@ class DecisionModel(ABC):
         Args:
             stimuli: The stimuli presented to the subject.
             actions: The actions taken by the subject.
-            weights: The weights to apply to each trial (e.g., for EM algorithms). If
-                None, all trials are weighted equally.
+            weights: The weights to use for each trial. If None, all of the trials are
+                weighted equally.
         """
+        if weights is None:
+            weights = np.ones_like(actions)
 
         def nll(params):
             self.params = params
-            return -self.log_likelihood(stimuli, actions, weights)
+            return -np.sum(
+                weights * self.log_likelihood(stimuli, actions, sum_over_trials=False)
+            )
 
         self.params = scipy.optimize.minimize(
             nll,
