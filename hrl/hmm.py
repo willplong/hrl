@@ -80,7 +80,7 @@ class HMM:
             for _ in range(time_steps - 1):
                 states.append(np.random.choice(self._num_states, p=self._A[states[-1]]))
             for t in range(time_steps):
-                actions[i, t] = self._decision_models[states[t]].sample(stim_i[t])
+                actions[i, t] = self._decision_models[states[t]].simulate(stim_i[t])
         return actions
 
     # TODO: Implement
@@ -102,7 +102,7 @@ class HMM:
             gamma, xi = self._e_step(stimuli, actions)
             self._pi, self._A = self._m_step(gamma, xi)
             for i, dm in enumerate(self._decision_models):
-                dm.fit(stimuli, actions, gamma[:, i, :])
+                dm.fit(stimuli, actions, gamma[:, :, i])
             print(self.initial_probs)
             print(self.transition_probs)
             print(self.decision_params)
@@ -111,65 +111,68 @@ class HMM:
         self, stimuli: np.ndarray, actions: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         num_trials, time_steps, _ = stimuli.shape
-        gamma = np.zeros((num_trials, self._num_states, time_steps))
-        xi = np.zeros((num_trials, self._num_states, self._num_states, time_steps - 1))
-        for i in range(num_trials):
-            stim_i = stimuli[i]
-            action_i = actions[i]
-            gamma[i], xi[i] = self._e_step_helper(stim_i, action_i)
+        log_likelihoods = np.zeros((num_trials, time_steps, self._num_states))
+        for i in range(self._num_states):
+            log_likelihoods[:, :, i] = self._decision_models[i].log_likelihood(
+                stimuli,
+                actions,
+                sum_over_trials=False,
+            )
+        gamma = np.zeros((num_trials, time_steps, self._num_states))
+        xi = np.zeros((num_trials, time_steps - 1, self._num_states, self._num_states))
+        for i, log_likes_i in enumerate(log_likelihoods):
+            gamma[i], xi[i] = self._e_step_helper(log_likes_i)
         return gamma, xi
 
     def _m_step(self, gamma, xi):
-        initial_probs = np.mean(gamma[:, :, 0], axis=0)
-        transition_probs = (
-            np.sum(xi, axis=(0, 3))
-            / np.sum(gamma[:, :, :-1], axis=(0, 2))[:, np.newaxis]
+        initial_probs = np.mean(gamma[:, 0, :], axis=0)
+        transition_probs = np.sum(xi, axis=(0, 1)) / np.sum(
+            gamma[:, :-1, :], axis=(0, 1)
         )
         return initial_probs, transition_probs
 
     def _e_step_helper(
-        self, seq_stim: np.ndarray, seq_actions: np.ndarray
+        self, seq_log_likes: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        alpha = self._forward_seq(seq_stim, seq_actions)
-        beta = self._backward_seq(seq_stim, seq_actions)
-        gamma = alpha * beta
-        gamma /= np.sum(gamma, axis=0)
-        xi = np.zeros((self._num_states, self._num_states, len(seq_actions) - 1))
-        for t in range(len(seq_actions) - 1):
+        time_steps = len(seq_log_likes)
+        alpha = self._forward_seq(seq_log_likes)
+        beta = self._backward_seq(seq_log_likes)
+        gamma = alpha + beta
+        gamma = np.exp(gamma)
+        gamma /= np.sum(gamma, axis=1, keepdims=True)
+        xi = np.zeros((time_steps - 1, self._num_states, self._num_states))
+        for t in range(time_steps - 1):
             for i in range(self._num_states):
                 for j in range(self._num_states):
-                    likelihood = self._decision_models[j].likelihood(
-                        seq_stim[t + 1], seq_actions[t + 1]
-                    )
-                    xi[i, j, t] = (
-                        alpha[i, t] * self._A[i, j] * likelihood * beta[j, t + 1]
-                    )
-        xi /= np.sum(xi, axis=(0, 1))
+                    xi[t, i, j] = alpha[t, i] + seq_log_likes[t + 1, j] + beta[t + 1, j]
+                    xi[t, i, j] = np.exp(xi[t, i, j])
+                    xi[t, i, j] *= self._A[i, j]
+        xi /= np.sum(xi, axis=(1, 2), keepdims=True)
         return gamma, xi
 
-    def _forward_seq(self, seq_stim: np.ndarray, seq_actions: np.ndarray) -> np.ndarray:
-        alpha = np.zeros((self._num_states, len(seq_actions)))
-        alpha[:, 0] = self._pi * [
-            dm.likelihood(seq_stim[0], seq_actions[0]) for dm in self._decision_models
-        ]
-        for t in range(1, len(seq_actions)):
+    def _forward_seq(self, seq_log_likes: np.ndarray) -> np.ndarray:
+        time_steps = len(seq_log_likes)
+        alpha = np.zeros((time_steps, self._num_states))
+        alpha[0] = np.log(self._pi) + seq_log_likes[0]
+        for t in range(1, time_steps):
+            alpha_max = np.max(alpha[t - 1])
             for s in range(self._num_states):
-                alpha[s, t] = np.sum(
-                    alpha[:, t - 1] * self._A[:, s]
-                ) * self._decision_models[s].likelihood(seq_stim[t], seq_actions[t])
-            alpha[:, t] /= np.sum(alpha[:, t])
+                alpha[t, s] = (
+                    alpha_max
+                    + np.log(np.sum(np.exp(alpha[t - 1] - alpha_max) * self._A[:, s]))
+                    + seq_log_likes[t, s]
+                )
         return alpha
 
-    def _backward_seq(
-        self, seq_stim: np.ndarray, seq_actions: np.ndarray
-    ) -> np.ndarray:
-        beta = np.zeros((self._num_states, len(seq_actions)))
-        beta[:, -1] = 1
-        for t in range(len(seq_actions) - 2, -1, -1):
+    def _backward_seq(self, seq_log_likes: np.ndarray) -> np.ndarray:
+        time_steps = len(seq_log_likes)
+        beta = np.zeros((time_steps, self._num_states))
+        beta[-1] = np.zeros(self._num_states)
+        for t in range(time_steps - 2, -1, -1):
+            val = beta[t + 1] + seq_log_likes[t + 1]
+            val_max = np.max(val)
             for s in range(self._num_states):
-                likelihoods = [
-                    dm.likelihood(seq_stim[t + 1], seq_actions[t + 1])
-                    for dm in self._decision_models
-                ]
-                beta[s, t] = np.sum(beta[:, t + 1] * self._A[s, :] * likelihoods)
+                beta[t, s] = val_max + np.log(
+                    np.sum(np.exp(val - val_max) * self._A[s])
+                )
         return beta
