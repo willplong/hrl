@@ -126,8 +126,9 @@ class HMM:
 
     def _m_step(self, gamma, xi):
         initial_probs = np.mean(gamma[:, 0, :], axis=0)
-        transition_probs = np.sum(xi, axis=(0, 1)) / np.sum(
-            gamma[:, :-1, :], axis=(0, 1)
+        transition_probs = (
+            np.sum(xi, axis=(0, 1))
+            / np.sum(gamma[:, :-1, :], axis=(0, 1))[:, np.newaxis]
         )
         return initial_probs, transition_probs
 
