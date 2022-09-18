@@ -207,7 +207,9 @@ class RLDecisionModel(DecisionModel):
         super().__init__(params, param_names, param_bounds, param_constraints)
 
     def _action_probabilities_impl(self, stimuli: np.ndarray) -> np.ndarray:
+        if stimuli.shape[-1] > 1:
+            raise ValueError("Cannot handle multiple stimuli.")
+        stimuli = np.squeeze(stimuli, axis=-1)
         mu, sigma, gamma_l, gamma_h = self.params
         p = gamma_l + (1 - gamma_l - gamma_h) * norm.cdf(stimuli, mu, sigma)
-        p = p.squeeze()
         return np.stack([1 - p, p], axis=-1)
